@@ -1,0 +1,89 @@
+import { ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
+import { getCurrentAccountKeys, getNetwork } from "../shared/account.js";
+import { Contract, getDefaultProvider, Wallet } from "@coti-io/coti-ethers";
+import { ERC721_ABI } from "../constants/abis.js";
+import { z } from "zod";
+
+export const GET_PRIVATE_ERC721_TOKEN_URI: ToolAnnotations = {
+    title: "Get Private ERC721 Token URI",
+    name: "get_private_erc721_token_uri",
+    description:
+        "Get the tokenURI for a private ERC721 NFT token on the COTI blockchain. " +
+        "This is used for retrieving the metadata URI of a private NFT. " +
+        "Requires token contract address and token ID as input. " +
+        "Returns the decrypted tokenURI.",
+    inputSchema: {
+        token_address: z.string().describe("ERC721 token contract address on COTI blockchain"),
+        token_id: z.string().describe("ID of the NFT token to get the URI for"),
+    },
+};
+
+/**
+ * Type guard for validating get private ERC721 token URI arguments
+ * @param args - Arguments to validate
+ * @returns True if arguments are valid for get private ERC721 token URI operation
+ */
+export function isGetPrivateERC721TokenURIArgs(args: unknown): args is { token_address: string, token_id: string } {
+    return (
+        typeof args === "object" &&
+        args !== null &&
+        "token_address" in args &&
+        typeof (args as { token_address: string }).token_address === "string" &&
+        "token_id" in args &&
+        typeof (args as { token_id: string }).token_id === "string"
+    );
+}
+
+/**
+ * Handler for the getPrivateERC721TokenURI tool
+ * @param args The arguments for the tool
+ * @returns The tool response
+ */
+export async function getPrivateERC721TokenURIHandler(args: Record<string, unknown> | undefined): Promise<any> {
+    if (!isGetPrivateERC721TokenURIArgs(args)) {
+        throw new Error("Invalid arguments for get_private_erc721_token_uri");
+    }
+    const { token_address, token_id } = args;
+
+    const results = await performGetPrivateERC721TokenURI(token_address, token_id);
+    return {
+        content: [{ type: "text", text: results }],
+        isError: false,
+    };
+}
+
+/**
+ * Gets the tokenURI for a private ERC721 NFT token on the COTI blockchain
+ * @param token_address The address of the ERC721 token contract
+ * @param token_id The ID of the token to get the URI for
+ * @returns A formatted string with the token URI information
+ */
+export async function performGetPrivateERC721TokenURI(token_address: string, token_id: string) {
+    try {
+        const currentAccountKeys = getCurrentAccountKeys();
+        const provider = getDefaultProvider(getNetwork());
+        const wallet = new Wallet(currentAccountKeys.privateKey, provider);
+        
+        wallet.setAesKey(currentAccountKeys.aesKey);
+        
+        const tokenContract = new Contract(token_address, ERC721_ABI, wallet);
+        
+        const [symbolResult, nameResult] = await Promise.all([
+            tokenContract.symbol(),
+            tokenContract.name()
+        ]);
+        
+        const encryptedTokenURI = await tokenContract.tokenURI(BigInt(token_id));
+
+        let tokenURI;
+        try {
+            tokenURI = await wallet.decryptValue(encryptedTokenURI);
+        } catch (decryptError) {
+            tokenURI = decryptError;
+        }
+        
+        return `Token: ${nameResult} (${symbolResult})\nToken ID: ${token_id}\nDecrypted Token URI: ${tokenURI}`;
+    } catch (error) {
+        throw new Error(`Failed to get private ERC721 token URI: ${error instanceof Error ? error.message : String(error)}`);
+    }
+}
